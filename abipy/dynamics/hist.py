@@ -14,13 +14,1034 @@ from pymatgen.core.periodic_table import Element
 from pymatgen.analysis.structure_analyzer import RelaxationAnalyzer
 from abipy.tools.plotting import add_fig_kwargs, get_ax_fig_plt, get_axarray_fig_plt, set_visible
 from abipy.core.structure import Structure
-from abipy.core.mixins import AbinitNcFile, NotebookWriter
+from abipy.core.mixins import AbinitNcFile, BaseFile, NotebookWriter
 from abipy.abio.robots import Robot
 from abipy.iotools import ETSF_Reader
 import abipy.core.abinit_units as abu
+from matplotlib.ticker import FormatStrFormatter
+
+#class BaseHistFile(AbinitNcFile):
+#    """
+#    Code common to _HIST.nc files :
+#    """
+
+class HistFileWithImages(BaseFile, NotebookWriter):
+    """
+    File with the history of a NEB calculation.
+
+    Usage example:
+
+    .. code-block:: python
+
+        with HistFileWithImages("foo_HIST") as hist:
+            hist.plot()
 
 
-class HistFile(AbinitNcFile, NotebookWriter):
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: HistFileWithImages
+    """
+    @classmethod
+    def from_file(cls, filepath):
+        """
+        Initialize the object from a netcdf_ file
+        """
+        return cls(filepath)
+
+    def __init__(self, filepath):
+        super(HistFileWithImages, self).__init__(filepath)
+        self.reader = HistReaderWithImages(filepath)
+
+    def close(self):
+        """
+        Close the file.
+        """
+        self.reader.close()
+
+    @lazy_property
+    def params(self):
+        """
+        class:`OrderedDict` with parameters that might be subject to convergence studies.
+        """
+        return {}
+
+    def __str__(self):
+        return self.to_string()
+
+    @property
+    def num_steps(self):
+        """
+        Number of iteration steps performed.
+        """
+        return self.reader.num_steps
+
+    @property
+    def num_images(self):
+        """
+        Number of NEB images.
+        """
+        return self.reader.num_images
+
+    @property
+    def ntypat(self):
+        """
+        Number of atomic types.
+        """
+        return self.reader.ntypat
+
+    @property
+    def natom(self):
+        """
+        Number of atoms.
+        """
+        return self.reader.natom
+
+    @lazy_property
+    def steps(self):
+        """
+        Step indices.
+        """
+        return list(range(self.num_steps))
+
+    @lazy_property
+    def images(self):
+        """
+        Image indices.
+        """
+        return list(range(self.num_images))
+
+    @lazy_property
+    def etotals(self):
+        """
+        Total energies in eV.
+        """
+        return self.reader.read_eterms().etotals
+
+    @lazy_property
+    def initial_neb_energy(self):
+        """
+        Total energies in eV of the first NEB iteration.
+        """
+        return self.etotals[-1]
+
+    @lazy_property
+    def initial_neb_pressures(self):
+        """
+        Pressures in GPa of the first NEB iteration.
+        """
+        cart_stress_tensors, pressures = self.reader.read_cart_stress_tensors()
+        return pressures[0]
+
+    @lazy_property
+    def initial_neb_structures(self):
+        """
+        Structures of the first NEB iteration.
+        """
+        return self.reader.read_all_structures()[0]
+
+    @lazy_property
+    def initial_neb_reduced_forces(self):
+        """
+        Reduced forces of the first NEB iteration.
+        """
+        return self.reader.read_reduced_forces()[0]
+
+    @lazy_property
+    def initial_neb_cart_forces(self):
+        """
+        Cartesian forces in eV ang^-1 of the first NEB iteration.
+        """
+        return self.reader.read_cart_forces()[0]
+
+    @lazy_property
+    def initial_neb_max_force(self):
+        """
+        Maximum force in eV ang^-1 of the first NEB iteration.
+        """
+        return self.reader.read_cart_forces()[0].max()
+
+    @lazy_property
+    def initial_neb_cart_stress_tensors(self):
+        """
+        Cartesian stress tensors of the first NEB iteration.
+        """
+        cart_stress_tensors, pressures = self.reader.read_cart_stress_tensors()
+        return cart_stress_tensors[0]
+
+    @lazy_property
+    def final_neb_energy(self):
+        """
+        Total energies in eV of the last NEB iteration.
+        """
+        return self.etotals[-1]
+
+    @lazy_property
+    def final_neb_pressures(self):
+        """
+        Pressures in GPa of the last NEB iteration.
+        """
+        cart_stress_tensors, pressures = self.reader.read_cart_stress_tensors()
+        return pressures[-1]
+
+    @lazy_property
+    def final_neb_structures(self):
+        """
+        Structures of the last NEB iteration.
+        """
+        return self.reader.read_all_structures()[-1]
+
+    @lazy_property
+    def final_neb_reduced_forces(self):
+        """
+        Reduced forces of the last NEB iteration.
+        """
+        return self.reader.read_reduced_forces()[-1]
+
+    @lazy_property
+    def final_neb_cart_forces(self):
+        """
+        Cartesian forces in eV ang^-1 of the last NEB iteration
+        """
+        return self.reader.read_cart_forces()[-1]
+
+    @lazy_property
+    def final_neb_max_force(self):
+        """
+        Maximum force in eV ang^-1 of the last NEB iteration.
+        """
+        return self.reader.read_cart_forces()[-1].max()
+
+    @lazy_property
+    def final_neb_cart_stress_tensors(self):
+        """
+        Cartesian stress tensors of the first NEB iteration.
+        """
+        cart_stress_tensors, pressures = self.reader.read_cart_stress_tensors()
+        return cart_stress_tensors[-1]
+
+    @lazy_property
+    def structures(self):
+        """List of |Structure| objects at the different steps."""
+        return self.reader.read_all_structures()
+
+
+    def get_fstats(self, step=None, image=None):
+        """
+        Return |AttrDict| with stats on the forces in eV ang^-1 for :
+            - a defined step                  : get_fstats(step=4)
+            - a defined image                 : get_fstats(image=2)
+            - defined step and image          : get_fstats(step=4,image=2)
+            - the overall of steps and images : get_fstats()
+        """
+        f = self.reader.read_cart_forces(unit="eV ang^-1")
+        if step is not None and image is None:
+            forces = f[step][:]
+        elif step is None and image is not None:
+            forces = f[:][image]
+        elif step is not None and image is not None:
+            forces = f[step][image]
+        else:
+            forces = f
+
+        fmods = np.array([np.linalg.norm(force) for force in forces])
+
+        return AttrDict(fmin=fmods.min(),
+                        fmax=fmods.max(),
+                        fmean=fmods.mean(),
+                        fstd=fmods.std(),
+                        drift=np.linalg.norm(forces.sum(axis=0)),
+                        )
+
+    def to_string(self, verbose=0, title=None):
+        """
+        String representation.
+        """
+        lines = []; app = lines.append
+        if title is not None: app(marquee(title, mark="="))
+
+        app(marquee("File Info", mark="="))
+        app(self.filestat(as_string=True))
+        app("")
+        app("Number of relaxation steps performed: %d" % self.num_steps)
+        app("Number of NEB images used: %d" % self.num_images)
+        app("")
+        app("Initial Structures")
+        for i in range(self.num_images):
+            s = self.initial_neb_structures[i]
+            app(" --> NEB image %3d : " % i)
+            app("        abc : %8.4f  %8.4f  %8.4f" % (s.lattice.abc))
+            app("     angles : %8.4f  %8.4f  %8.4f" % (s.lattice.angles))
+            app("     volume : %8.4f" % (s.lattice.volume))
+            app("  structure :")
+            typat = self.reader.read_value("typat").astype(int)
+            for j in range(self.natom):
+                app(" %3d %s" % (j, np.array2string(s.frac_coords[j])))
+        app("")
+        app("Final Structures")
+        app("")
+        for i in range(self.num_images):
+            s = self.final_neb_structures[i]
+            app(" --> NEB image %3d : " % i)
+            app("        abc : %8.4f  %8.4f  %8.4f" % (s.lattice.abc))
+            app("     angles : %8.4f  %8.4f  %8.4f" % (s.lattice.angles))
+            app("     volume : %8.4f" % (s.lattice.volume))
+            app("  structure :")
+            typat = self.reader.read_value("typat").astype(int)
+            for j in range(self.natom):
+                app(" %3d %s" % (j, np.array2string(s.frac_coords[j])))
+        #an = self.get_relaxation_analyzer()
+        #app("Volume change in percentage: %.2f%%" % (an.get_percentage_volume_change() * 100))
+        #d = an.get_percentage_lattice_parameter_changes()
+        #vals = tuple(d[k] * 100 for k in ("a", "b", "c"))
+        #app("Percentage lattice parameter changes:\n\ta: %.2f%%, b: %.2f%%, c: %2.f%%" % vals)
+        #an.get_percentage_bond_dist_changes(max_radius=3.0)
+        app("")
+
+        t,p = self.reader.read_cart_stress_tensors()
+        for i in range(self.num_images):
+            app(" --> NEB image %3d : " % i)
+            app("     - Pressure = %s GPa" % p[-1][i])
+            app("     - Stress tensor = ")
+            for j in range(3):
+                app("      %8.4f %8.4f %8.4f " % (t[-1][i][j][0], t[-1][i][j][1], t[-1][i][j][2]))
+
+        return "\n".join(lines)
+
+    def get_neb_analyzer(self):
+        """
+        Return a pymatgen :class:`RelaxationAnalyzer` object to analyze the relaxation in a calculation.
+        """
+        return RelaxationAnalyzer(self.final_neb_structures[0], self.final_neb_structures[-1])
+
+    def to_vasp_struct(self, filepath=None, groupby_type=True, to_unit_cell=False,
+                       step_item=None, image_item=None, filetype=None, **kwargs):
+        """
+        Return Xdatcar or Poscar pymatgen object and files. 
+        See write_vasp_struct for the meaning of arguments.
+
+        Args:
+            to_unit_cell (bool): Whether to translate sites into the unit cell.
+            kwargs: keywords arguments passed to Xdatcar or Poscar constructor.
+        """
+
+        if filetype == "XDATCAR" or filetype == "X":
+            filepath = self.write_StructToXdatcar(filepath=filepath, groupby_type=groupby_type,
+                                          to_unit_cell=to_unit_cell, overwrite=True,
+                                          step_item=step_item, image_item=image_item)
+            from pymatgen.io.vasp.outputs import Xdatcar
+            return Xdatcar(filepath, **kwargs)
+        if filetype == "POSCAR" or filetype == "P":
+            filepath = self.write_StructToPoscar(filepath=filepath, groupby_type=groupby_type,
+                                          to_unit_cell=to_unit_cell, overwrite=True,
+                                          step_item=step_item, image_item=image_item)
+            return Structure.from_file(filepath)
+
+    def write_StructToXdatcar(self, filepath, groupby_type=True, 
+                              to_unit_cell=False, overwrite=False, step_item=None, 
+                              image_item=None):
+        """
+        Write Xdatcar file with unit cell and atomic positions to file ``filepath``.
+
+        Args:
+            filepath: Xdatcar filename. If None, a temporary file is created.
+            groupby_type: If True, atoms are grouped by type. Note that this option
+                may change the order of the atoms. This option is needed because
+                there are post-processing tools (e.g. ovito) that do not work as expected
+                if the atoms in the structure are not grouped by type.
+            overwrite: raise RuntimeError, if False and filepath exists.
+            to_unit_cell (bool): Whether to translate sites into the unit cell.
+
+        Return:
+            path to Xdatcar file.
+        """
+        if filepath is not None and os.path.exists(filepath) and not overwrite:
+            raise RuntimeError("Cannot overwrite pre-existing file `%s`" % filepath)
+        if filepath is None:
+            import tempfile
+            fd, filepath = tempfile.mkstemp(text=True, suffix="_XDATCAR")
+
+        # int typat[natom], double znucl[npsp]
+        # NB: typat is double in the HIST.nc file
+        typat = self.reader.read_value("typat").astype(int)
+        znucl = self.reader.read_value("znucl")
+        ntypat = self.reader.read_dimvalue("ntypat")
+        num_pseudos = self.reader.read_dimvalue("npsp")
+        if num_pseudos != ntypat:
+            raise NotImplementedError("Alchemical mixing is not supported, num_pseudos != ntypat")
+        #print("znucl:", znucl, "\ntypat:", typat)
+
+        symb2pos = OrderedDict()
+        symbols_atom = []
+        for iatom, itype in enumerate(typat):
+            itype = itype - 1
+            symbol = Element.from_Z(int(znucl[itype])).symbol
+            if symbol not in symb2pos: symb2pos[symbol] = []
+            symb2pos[symbol].append(iatom)
+            symbols_atom.append(symbol)
+
+        if not groupby_type:
+            group_ids = np.arange(self.reader.natom)
+        else:
+            group_ids = []
+            for pos_list in symb2pos.values():
+                group_ids.extend(pos_list)
+            group_ids = np.array(group_ids, dtype=np.int)
+
+        if step_item is not None and image_item is None:
+            xred_list = self.reader.read_value("xred")[step_item]
+            end = self.num_images
+        elif step_item is None and image_item is not None:
+            xred_list = [self.reader.read_value("xred")[stc][image_item] for stc in range(self.num_steps)]
+            end = self.num_steps
+        elif step_item is not None and image_item is not None:
+            xred_list = self.reader.read_value("xred")[step_item][image_item]
+            end = 1
+        elif step_item is None and image_item is None:
+            xred_list = self.reader.read_value("xred")[-1]
+            end = self.num_images
+
+        #comment = " %s\n" % self.initial_neb_structures[0].formula
+        comment = "%s\n" % "NEB calculation"
+
+        with open(filepath, "wt") as fh:
+            # comment line  + scaling factor set to 1.0
+            fh.write(comment)
+            fh.write("%11s 1.\n" % " ")
+            for vec in self.initial_neb_structures[0].lattice.matrix:
+                fh.write("%4s %11.6f %11.6f %11.6f\n" % (" ", vec[0], vec[1], vec[2]))
+            if not groupby_type:
+                fh.write("   ".join(symbols_atom) + "\n")
+                fh.write("1  "* len(symbols_atom) + "\n")
+            else:
+                fh.write("   ".join(symb2pos.keys()) + "\n")
+                fh.write("   ".join(str(len(p)) for p in symb2pos.values()) + "\n")
+
+            # Write atomic positions in reduced coordinates.
+            if to_unit_cell:
+                xred_list = xred_list % 1
+
+            for i in range(end):
+                fh.write("Direct configuration= %d\n" % (i + 1))
+                frac_coords = xred_list[i, group_ids]
+                for fs in frac_coords:
+                    fh.write("%.12f %.12f %.12f\n" % (fs[0], fs[1], fs[2]))
+
+        return filepath
+
+    def write_StructToPoscar(self, filepath, groupby_type=True,
+                          to_unit_cell=False, overwrite=False, step_item=None,
+                          image_item=None):
+        """
+        Write Poscar file with unit cell and atomic positions to file ``filepath``.
+
+        Args:
+            filepath: Poscar filename. If None, a temporary file is created.
+            groupby_type: If True, atoms are grouped by type. Note that this option
+                may change the order of the atoms. This option is needed because
+                there are post-processing tools (e.g. ovito) that do not work as expected
+                if the atoms in the structure are not grouped by type.
+            overwrite: raise RuntimeError, if False and filepath exists.
+            to_unit_cell (bool): Whether to translate sites into the unit cell.
+
+        Return:
+            path to Poscar file.
+        """
+        if filepath is not None and os.path.exists(filepath) and not overwrite:
+            raise RuntimeError("Cannot overwrite pre-existing file `%s`" % filepath)
+        if filepath is None:
+            import tempfile
+            fd, filepath = tempfile.mkstemp(text=True, suffix="_POSCAR")
+
+        # int typat[natom], double znucl[npsp]
+        # NB: typat is double in the HIST.nc file
+        typat = self.reader.read_value("typat").astype(int)
+        znucl = self.reader.read_value("znucl")
+        ntypat = self.reader.read_dimvalue("ntypat")
+        num_pseudos = self.reader.read_dimvalue("npsp")
+        if num_pseudos != ntypat:
+            raise NotImplementedError("Alchemical mixing is not supported, num_pseudos != ntypat")
+        #print("znucl:", znucl, "\ntypat:", typat)
+
+        symb2pos = OrderedDict()
+        symbols_atom = []
+        for iatom, itype in enumerate(typat):
+            itype = itype - 1
+            symbol = Element.from_Z(int(znucl[itype])).symbol
+            if symbol not in symb2pos: symb2pos[symbol] = []
+            symb2pos[symbol].append(iatom)
+            symbols_atom.append(symbol)
+
+        if not groupby_type:
+            group_ids = np.arange(self.reader.natom)
+        else:
+            group_ids = []
+            for pos_list in symb2pos.values():
+                group_ids.extend(pos_list)
+            group_ids = np.array(group_ids, dtype=np.int)
+
+        if step_item is not None and image_item is None:
+            xred_list = self.reader.read_value("xred")[step_item]
+            end = self.num_images
+        elif step_item is None and image_item is not None:
+            xred_list = [self.reader.read_value("xred")[stc][image_item] for stc in range(self.num_steps)]
+            end = self.num_steps
+        elif step_item is not None and image_item is not None:
+            xred_list = self.reader.read_value("xred")[step_item][image_item]
+            end = 1
+        elif step_item is None and image_item is None:
+            xred_list = self.reader.read_value("xred")[-1]
+            end = self.num_images
+
+        #comment = " %s\n" % self.initial_neb_structures[0].formula
+        comment = "%s\n" % "NEB calculation"
+
+        with open(filepath, "wt") as fh:
+            # comment line  + scaling factor set to 1.0
+            fh.write(comment)
+            fh.write("%11s 1.\n" % " ")
+            for vec in self.initial_neb_structures[0].lattice.matrix:
+                fh.write("%4s %11.6f %11.6f %11.6f\n" % (" ", vec[0], vec[1], vec[2]))
+            if not groupby_type:
+                fh.write("   ".join(symbols_atom) + "\n")
+                fh.write("1  "* len(symbols_atom) + "\n")
+            else:
+                fh.write("   ".join(symb2pos.keys()) + "\n")
+                fh.write("   ".join(str(len(p)*end) for p in symb2pos.values()) + "\n")
+
+            # Write atomic positions in reduced coordinates.
+            if to_unit_cell:
+                xred_list = xred_list % 1
+            fh.write("Direct coordinates\n")
+            for at in range(self.natom):
+                for i in range(end):
+                    fs = xred_list[i,at]
+                    fh.write("%.12f %.12f %.12f\n" % (fs[0], fs[1], fs[2]))
+
+        return filepath
+
+    def visualize(self, appname="ovito", to_unit_cell=False):  # pragma: no cover
+        """
+        Visualize the crystalline structure with visualizer.
+        See :class:`Visualizer` for the list of applications and formats supported.
+
+        Args:
+            to_unit_cell (bool): Whether to translate sites into the unit cell.
+        """
+        if appname == "mayavi": return self.mayaview()
+
+        # Get the Visualizer subclass from the string.
+        from abipy.iotools import Visualizer
+        visu = Visualizer.from_name(appname)
+        if visu.name != "ovito":
+            raise NotImplementedError("visualizer: %s" % visu.name)
+
+        filepath = self.write_xdatcar(filepath=None, groupby_type=True, to_unit_cell=to_unit_cell)
+
+        return visu(filepath)()
+        #if options.trajectories:
+        #    hist.mvplot_trajectories()
+        #else:
+        #    hist.mvanimate()
+
+    def plot_ax(self, ax, what, fontsize=12, step=None, image=None, **kwargs):
+        """
+        Helper function to plot quantity ``what`` on axis ``ax``.
+        The x axis could be steps as well as images.
+
+        Args:
+            fontsize: fontsize for legend
+            kwargs are passed to matplotlib plot method
+        """
+        label = None
+        if image is None and step is None:
+            raise ValueError("'image' or 'step' should be set")
+        elif image is not None and step is not None:
+            raise ValueError("'image' or 'step' should be unset")
+        
+        if what == "energy":
+            # Total energy in eV.
+            marker = kwargs.pop("marker", "o")
+            label = kwargs.pop("label", "Energy")
+            if image is not None and step is None:
+                ax.plot(self.steps, [self.etotals[stc][image] for stc in range(self.num_steps)], label=label, marker=marker, **kwargs)
+                ax.set_xlabel("Steps of NEB image %d" % image)
+            if image is None and step is not None:
+                ax.plot(self.images, self.etotals[step], label=label, marker=marker, **kwargs)
+                ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel('Energy (eV)')
+
+        elif what == "abc":
+            # Lattice parameters.
+            mark = kwargs.pop("marker", None)
+            markers = ["o", "^", "v"] if mark is None else 3 * [mark]
+            for i, label in enumerate(["a", "b", "c"]):
+                if image is not None and step is None:
+                    ax.plot(self.steps, [s.lattice.abc[i] for s in [self.structures[stc][image] for stc in range(self.num_steps)]], label=label,
+                            marker=markers[i], **kwargs)
+                    ax.set_xlabel("Steps of NEB image %d" % image)
+                if image is None and step is not None:
+                    ax.plot(self.images, [s.lattice.abc[i] for s in self.structures[step]], label=label,
+                            marker=markers[i], **kwargs)
+                    ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel("abc (A)")
+
+        elif what in ("a", "b", "c"):
+            i =  ("a", "b", "c").index(what)
+            marker = kwargs.pop("marker", None)
+            if marker is None:
+                marker = {"a": "o", "b": "^", "c": "v"}[what]
+            label = kwargs.pop("label", what)
+            if image is not None and step is None:
+                ax.plot(self.steps, [s.lattice.abc[i] for s in [self.structures[stc][image] for stc in range(self.num_steps)]], label=label,
+                        marker=marker, **kwargs)
+                ax.set_xlabel("Steps of NEB image %d" % image)
+            if image is None and step is not None:
+                ax.plot(self.images, [s.lattice.abc[i] for s in self.structures[step]], label=label,
+                        marker=marker, **kwargs)
+                ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel('%s (A)' % what)
+
+        elif what == "angles":
+            # Lattice Angles
+            mark = kwargs.pop("marker", None)
+            markers = ["o", "^", "v"] if mark is None else 3 * [mark]
+            for i, label in enumerate(["alpha", "beta", "gamma"]):
+                if image is not None and step is None:
+                    ax.plot(self.steps, [s.lattice.angles[i] for s in [self.structures[stc][image] for stc in range(self.num_steps)]], label=label,
+                            marker=markers[i], **kwargs)
+                    ax.set_xlabel("Steps of NEB image %d" % image)
+                if image is None and step is not None:
+                    ax.plot(self.images, [s.lattice.angles[i] for s in self.structures[step]], label=label,
+                            marker=markers[i], **kwargs)
+                    ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel(r"$\alpha\beta\gamma$ (degree)")
+
+        elif what in ("alpha", "beta", "gamma"):
+            i =  ("alpha", "beta", "gamma").index(what)
+            marker = kwargs.pop("marker", None)
+            if marker is None:
+                marker = {"alpha": "o", "beta": "^", "gamma": "v"}[what]
+
+            label = kwargs.pop("label", what)
+            if image is not None and step is None:
+                ax.plot(self.steps, [s.lattice.angles[i] for s in [self.structures[stc][image] for stc in range(self.num_steps)]], label=label,
+                        marker=marker, **kwargs)
+                ax.set_xlabel("Steps of NEB image %d" % image)
+            if image is None and step is not None:
+                ax.plot(self.images, [s.lattice.angles[i] for s in self.structures[step]], label=label,
+                        marker=marker, **kwargs)
+                ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel(r"$\%s$ (degree)" % what)
+
+        elif what == "volume":
+            marker = kwargs.pop("marker", "o")
+            if image is not None and step is None:
+                ax.plot(self.steps, [s.lattice.volume for s in [self.structures[stc][image] for stc in range(self.num_steps)]], marker=marker, **kwargs)
+                ax.set_xlabel("Steps of NEB image %d" % image)
+            if image is None and step is not None:
+                ax.plot(self.images, [s.lattice.volume for s in self.structures[step]], marker=marker, **kwargs)
+                ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel(r'$V\, (A^3)$')
+
+        elif what == "pressure":
+            stress_cart_tensors, pressures = self.reader.read_cart_stress_tensors()
+            marker = kwargs.pop("marker", "o")
+            label = kwargs.pop("label", "P")
+            if image is not None and step is None:
+                ax.plot(self.steps, [pressures[stc][image] for stc in range(self.num_steps)], label=label, marker=marker, **kwargs)
+                ax.set_xlabel("Steps of NEB image %d" % image)
+            if image is None and step is not None:
+                ax.plot(self.images, pressures[step][:], label=label, marker=marker, **kwargs)
+                ax.set_xlabel("NEB images of step %d" % step)
+            ax.set_ylabel('P (GPa)')
+
+        elif what == "forces":
+            forces_hist = self.reader.read_cart_forces()
+            fmin_steps, fmax_steps, fmean_steps, fstd_steps = [], [], [], []
+            if image is None and step is not None:
+                for image in range(self.num_images):
+                    forces = forces_hist[step][image]
+                    fmods = np.sqrt([np.dot(force, force) for force in forces])
+                    fmean_steps.append(fmods.mean())
+                    fstd_steps.append(fmods.std())
+                    fmin_steps.append(fmods.min())
+                    fmax_steps.append(fmods.max())
+            elif image is not None and step is None:
+                for step in range(self.num_steps):
+                    forces = forces_hist[step][image]
+                    fmods = np.sqrt([np.dot(force, force) for force in forces])
+                    fmean_steps.append(fmods.mean())
+                    fstd_steps.append(fmods.std())
+                    fmin_steps.append(fmods.min())
+                    fmax_steps.append(fmods.max())
+
+            mark = kwargs.pop("marker", None)
+            markers = ["o", "^", "v", "X"] if mark is None else 4 * [mark]
+            if image is not None and step is None:
+                ax.plot(self.steps, fmin_steps, label="min |F|", marker=markers[0], **kwargs)
+                ax.plot(self.steps, fmax_steps, label="max |F|", marker=markers[1], **kwargs)
+                ax.plot(self.steps, fmean_steps, label="mean |F|", marker=markers[2], **kwargs)
+                ax.plot(self.steps, fstd_steps, label="std |F|", marker=markers[3], **kwargs)
+                ax.set_xlabel("Steps of NEB image %d" % image)
+            if image is None and step is not None:
+                ax.plot(self.images, fmin_steps, label="min |F|", marker=markers[0], **kwargs)
+                ax.plot(self.images, fmax_steps, label="max |F|", marker=markers[1], **kwargs)
+                ax.plot(self.images, fmean_steps, label="mean |F|", marker=markers[2], **kwargs)
+                ax.plot(self.images, fstd_steps, label="std |F|", marker=markers[3], **kwargs)
+                ax.set_xlabel("NEB images of step %d" % step)
+            label = "std |F"
+            ax.set_ylabel('F stats (eV/A)')
+
+        else:
+            raise ValueError("Invalid value for what: `%s`" % str(what))
+
+        ax.set_xlabel('Step')
+        ax.grid(True)
+        if label is not None:
+            ax.legend(loc='best', fontsize=fontsize, shadow=True)
+
+
+    @add_fig_kwargs
+    def plot(self, fontsize=8, ax_list=None, step=None, image=None, **kwargs):
+        """
+        Plot the evolution of structural parameters (lattice lengths, angles and volume)
+        as well as pressure, info on forces and total energy.
+
+        Args:
+            ax_list: List of |matplotlib-Axes|. If None, a new figure is created.
+            fontsize: fontsize for legend
+
+        Returns: |matplotlib-Figure|
+        """
+        what_list = ["abc", "angles", "volume", "pressure", "forces", "energy"]
+        nrows, ncols = 3, 2
+        ax_list, fig, plt = get_axarray_fig_plt(None, nrows=nrows, ncols=ncols,
+                                                sharex=True, sharey=False, squeeze=False)
+        ax_list = ax_list.ravel()
+        assert len(ax_list) == len(what_list)
+
+        for what, ax in zip(what_list, ax_list):
+            self.plot_ax(ax, what, fontsize=fontsize, step=step, image=image, marker="o")
+
+        return fig
+
+    @add_fig_kwargs
+    def plot_energies(self, fontsize=12, ax=None, step=None, image=None, **kwargs):
+        """
+        Plot the total energies as function of the iteration step or NEB image.
+
+        Args:
+            ax: |matplotlib-Axes| or None if a new figure should be created.
+            fontsize: Legend and title fontsize.
+
+        Returns: |matplotlib-Figure|
+        """
+        # TODO max force and pressure
+        ax, fig, plt = get_ax_fig_plt(ax=ax)
+
+        # Total energy in eV.
+        marker = kwargs.pop("marker", "o")
+        label = kwargs.pop("label", "Energy")
+        if image is not None and step is None:
+            ax.plot(self.steps, ([self.etotals[stc][image] for stc in range(self.num_steps)] - 
+                                min([self.etotals[stc][image] for stc in range(self.num_steps)]))*1000./float(self.natom), label=label, marker=marker, **kwargs)
+            ax.set_xlabel("Steps of NEB image %d" % image)
+        if image is None and step is not None:
+            ax.plot(self.images, (self.etotals[step]-self.etotals[step].min())*1000./float(self.natom), label=label, marker=marker, **kwargs)
+            ax.set_xlabel("NEB images of step %d" % step)
+        if image is None and step is None:
+            ax.plot(self.images, (self.etotals[-1]-self.etotals[-1].min())*1000./float(self.natom), label=label, marker=marker, **kwargs)
+            ax.set_xlabel("NEB images")
+
+
+        ax.set_ylabel('Energies (meV atom^-1)')
+        ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+        ax.grid(True)
+        ax.legend(loc='best', fontsize=fontsize, shadow=True)
+
+        return fig
+
+    def yield_figs(self, **kwargs):  # pragma: no cover
+        """
+        This function *generates* a predefined list of matplotlib figures with minimal input from the user.
+        """
+        yield self.plot(show=False)
+        yield self.plot_energies(show=False)
+
+    def mvplot_trajectories(self, step=None, image=None, colormap="hot", sampling=1, figure=None, show=True,
+                            with_forces=True, **kwargs):  # pragma: no cover
+        """
+        Call mayavi_ to plot atomic trajectories and the variation of the unit cell.
+        """
+        from abipy.display import mvtk
+        figure, mlab = mvtk.get_fig_mlab(figure=figure)
+        style = "labels"
+        line_width = 100
+        if image is not None and step is None:
+            mvtk.plot_structure(self.structures[-1][image][0], style=style, unit_cell_color=(0, 0, 0), figure=figure)
+            mvtk.plot_structure(self.structures[-1][image][-1], style=style, unit_cell_color=(1, 0, 0), figure=figure)
+        if image is None and step is not None:
+            mvtk.plot_structure(self.structures[step][0][0], style=style, unit_cell_color=(0, 0, 0), figure=figure)
+            mvtk.plot_structure(self.structures[step][0][-1], style=style, unit_cell_color=(1, 0, 0), figure=figure)
+
+        if image is not None and step is None:
+            steps = np.arange(start=0, stop=self.num_steps, step=sampling)
+            xcart_list = [self.reader.read_value("xcart")[stc][image] for stc in range(self.num_steps)] * units.bohr_to_ang
+        if image is None and step is not None:
+            images = np.arange(start=0, stop=self.num_images, step=sampling)
+            xcart_list = self.reader.read_value("xcart")[step] * units.bohr_to_ang
+        for iatom in range(self.reader.natom):
+            x, y, z = xcart_list[::sampling, iatom, :].T
+            #for i in zip(x, y, z): print(i)
+            trajectory = mlab.plot3d(x, y, z, steps, colormap=colormap, tube_radius=None,
+                                    line_width=line_width, figure=figure)
+            mlab.colorbar(trajectory, title='Iteration', orientation='vertical')
+
+        if with_forces:
+            if image is not None and step is None:
+                fcart_list = [self.reader.read_cart_forces(unit="eV ang^-1")[stc][image] for stc in range(self.num_steps)]
+            if image is None and step is not None:
+                fcart_list = self.reader.read_cart_forces(unit="eV ang^-1")[step]
+            for iatom in range(self.reader.natom):
+                x, y, z = xcart_list[::sampling, iatom, :].T
+                u, v, w = fcart_list[::sampling, iatom, :].T
+                q = mlab.quiver3d(x, y, z, u, v, w, figure=figure, colormap=colormap,
+                                  line_width=line_width, scale_factor=10)
+                #mlab.colorbar(q, title='Forces [eV/Ang]', orientation='vertical')
+
+        if show: mlab.show()
+        return figure
+
+    def mvanimate_neb(self, delay=500):  # pragma: no cover
+        from abipy.display import mvtk
+        figure, mlab = mvtk.get_fig_mlab(figure=None)
+        style = "points"
+        #mvtk.plot_structure(self.initial_structure, style=style, figure=figure)
+        #mvtk.plot_structure(self.final_structure, style=style, figure=figure)
+
+        xcart_list = self.reader.read_value("xcart")[-1] * units.bohr_to_ang
+        #t = np.arange(self.num_steps)
+        #line_width = 2
+        #for iatom in range(self.reader.natom):
+        #    x, y, z = xcart_list[:, iatom, :].T
+        #    trajectory = mlab.plot3d(x, y, z, t, colormap=colormap, tube_radius=None, line_width=line_width, figure=figure)
+        #mlab.colorbar(trajectory, title='Iteration', orientation='vertical')
+
+        #x, y, z = xcart_list[0, :, :].T
+        #nodes = mlab.points3d(x, y, z)
+        #nodes.glyph.scale_mode = 'scale_by_vector'
+        #this sets the vectors to be a 3x5000 vector showing some random scalars
+        #nodes.mlab_source.dataset.point_data.vectors = np.tile( np.random.random((5000,)), (3,1))
+        #nodes.mlab_source.dataset.point_data.scalars = np.random.random((5000,))
+
+        @mlab.show
+        @mlab.animate(delay=delay, ui=True)
+        def anim():
+            """Animate."""
+            for it, structure in enumerate(self.final_neb_structures):
+            #for it in range(self.num_steps):
+                print('Updating scene for iteration:', it)
+                #mlab.clf(figure=figure)
+                mvtk.plot_structure(structure, style=style, figure=figure)
+                #x, y, z = xcart_list[it, :, :].T
+                #nodes.mlab_source.set(x=x, y=y, z=z)
+                #figure.scene.render()
+                mlab.draw(figure=figure)
+                yield
+
+        anim()
+
+    def write_notebook(self, nbpath=None):
+        """
+        Write a jupyter_ notebook to ``nbpath``. If nbpath is None, a temporay file in the current
+        working directory is created. Return path to the notebook.
+        """
+        nbformat, nbv, nb = self.get_nbformat_nbv_nb(title=None)
+
+        nb.cells.extend([
+            #nbv.new_markdown_cell("# This is a markdown cell"),
+            nbv.new_code_cell("hist = abilab.abiopen('%s')" % self.filepath),
+            nbv.new_code_cell("print(hist)"),
+            nbv.new_code_cell("hist.plot_energies();"),
+            nbv.new_code_cell("hist.plot();"),
+        ])
+
+        return self._write_nb_nbpath(nb, nbpath)
+
+class HistReaderWithImages(ETSF_Reader):
+    """
+    This object reads data from the HIST file coming from
+    a NEB calculation.
+
+
+    .. rubric:: Inheritance Diagram
+    .. inheritance-diagram:: HistReaderWithImages
+    """
+
+    @lazy_property
+    def num_steps(self):
+        """
+        Number of iteration steps.
+        """
+        return self.read_dimvalue("time")
+
+    @lazy_property
+    def ntypat(self):
+        """
+        Number of atomic types.
+        """
+        return self.read_dimvalue("ntypat")
+
+    @lazy_property
+    def num_images(self):
+        """
+        Number of NEB images.
+        """
+        return self.read_dimvalue("nimage")
+
+    @lazy_property
+    def natom(self):
+        """
+        Number of atoms un the unit cell.
+        """
+        return self.read_dimvalue("natom")
+
+    def read_rprimd(self):
+        """
+        Read and return a |numpy-array| with the list of real space primitive
+        translations.
+        Shape (num_steps, num_images, 3, 3)
+        """
+        return self.read_value("rprimd")
+
+    def read_acell(self):
+        """
+        Read and return a |numpy-array| with the list of cell parameters.
+        Shape (num_steps, num_images, 3)
+        """
+        return self.read_value("acell")
+
+    def read_dynamics_settings(self):
+        """
+        Dictionary of settings related to the dynamics.
+        """
+        return AttrDict(dtion=self.read_value("dtion"),
+                        mdtemp=self.read_value("mdtemp"),
+                        mdtime=self.read_value("mdtime"),
+                        imgmov=self.read_value("imgmov"))
+
+    def read_atom_type(self):
+        """
+        Dictionary of atom properties.
+        """
+        return AttrDict(ntypat=self.read_dimvalue("ntypat"),
+                        npsp=self.read_dimvalue("npsp"),
+                        typat=self.read_value("typat"),
+                        amu=self.read_value("amu"),
+                        znucl=self.read_value("znucl"))
+
+    def read_all_structures(self):
+        """
+        Return the list of structures at the different iteration steps and NEB images.
+        Shape (num_steps, num_images)
+        """
+        rprimd_list = self.read_value("rprimd")
+        xred_list = self.read_value("xred")
+        acell_list = self.read_value("acell")
+
+        # Alchemical mixing is not supported.
+        num_pseudos = self.read_dimvalue("npsp")
+        ntypat = self.read_dimvalue("ntypat")
+        if num_pseudos != ntypat:
+            raise NotImplementedError("Alchemical mixing is not supported, num_pseudos != ntypat")
+
+        znucl, typat = self.read_value("znucl"), self.read_value("typat").astype(int)
+        #print(znucl.dtype, typat)
+        cart_forces_step = self.read_cart_forces(unit="eV ang^-1")
+
+        structures = []
+        for step in range(self.num_steps):
+            S = []
+            for image in range(self.num_images):
+                s = Structure.from_abivars(
+                        xred=xred_list[step,image,:,:],
+                        rprim=rprimd_list[step,image,:,:],
+                        acell=3*[1.0],
+                        #acell=acell_list[step,image,:],
+                        znucl=znucl,
+                        typat=typat,
+                        ntypat=ntypat,
+                        )
+                s.add_site_property("cartesian_forces", cart_forces_step[step,image])
+                S.append(s)
+            structures.append(S)
+        return structures
+
+    def read_eterms(self, unit="eV"):
+        """
+        |AttrDict| with the decomposition of the total energy in units ``unit``
+        Shape (num_steps, num_images)
+        """
+        return AttrDict(
+        etotals=units.EnergyArray(self.read_value("etotal"), "Ha").to(unit),
+        kinetic_terms=units.EnergyArray(self.read_value("ekin"), "Ha").to(unit),
+        entropies=units.EnergyArray(self.read_value("entropy"), "Ha").to(unit))
+
+    def read_cart_forces(self, unit="eV ang^-1"):
+        """
+        Read and return a |numpy-array| with the cartesian forces in unit ``unit``.
+        Shape (num_steps, num_images, natom, 3)
+        """
+        return units.ArrayWithUnit(self.read_value("fcart"), "Ha bohr^-1").to(unit)
+
+    def read_reduced_forces(self):
+        """
+        Read and return a |numpy-array| with the forces in reduced coordinates
+        Shape (num_steps, num_images, natom, 3)
+        """
+        return self.read_value("fred")
+
+    def read_cart_stress_tensors(self):
+        """
+        Return the stress tensors (nstep x 3 x 3) in cartesian coordinates (GPa)
+        and the list of pressures in GPa unit.
+        Shape t(num_steps, num_images, 3, 3) and p(num_steps, num_images)
+        """
+        # Abinit stores 6 unique components of this symmetric 3x3 tensor:
+        # Given in order (1,1), (2,2), (3,3), (3,2), (3,1), (2,1).
+        c = self.read_value("strten")
+        tensors = np.empty((self.num_steps, self.num_images, 3, 3), dtype=np.float)
+        pressures = np.empty((self.num_steps,self.num_images), dtype=np.float)
+
+        for step in range(self.num_steps):
+            for image in range(self.num_images):
+                for i in range(3): tensors[step, image,i,i] = c[step,image,i]
+                for p, (i, j) in enumerate(((2,1), (2,0), (1,0))):
+                    tensors[step,image, i,j] = c[step, image, 3+p]
+                    tensors[step,image, j,i] = c[step, image, 3+p]
+        tensors *= abu.HaBohr3_GPa
+
+        for step in range(self.num_steps):
+            for image in range(self.num_images):
+                pressures[step,image] = - tensors[step,image,:,:].trace() / 3
+
+        return tensors, pressures
+
+    def read_cell_velocities(self):
+        """
+        Read and return a |numpy-array| with the velocities of cell bohr*Ha/hbar.
+        Shape (num_steps, num_images, 3, 3)
+        """
+        return self.read_value("vel_cell")
+
+    def read_atomic_velocities(self):
+        """
+        Read and return a |numpy-array| with the atomic velocities in bohr*Ha/hbar.
+        Shape (num_steps, num_images, natom, 3)
+        """
+        return self.read_value("vel_cell")
+
+
+class HistFile(BaseFile, NotebookWriter):
     """
     File with the history of a structural relaxation or molecular dynamics calculation.
 
@@ -167,95 +1188,6 @@ class HistFile(AbinitNcFile, NotebookWriter):
         Return a pymatgen :class:`RelaxationAnalyzer` object to analyze the relaxation in a calculation.
         """
         return RelaxationAnalyzer(self.initial_structure, self.final_structure)
-
-    def to_xdatcar(self, filepath=None, groupby_type=True, to_unit_cell=False, **kwargs):
-        """
-        Return Xdatcar pymatgen object. See write_xdatcar for the meaning of arguments.
-
-        Args:
-            to_unit_cell (bool): Whether to translate sites into the unit cell.
-            kwargs: keywords arguments passed to Xdatcar constructor.
-        """
-        filepath = self.write_xdatcar(filepath=filepath, groupby_type=groupby_type,
-                                      to_unit_cell=to_unit_cell, overwrite=True)
-        from pymatgen.io.vasp.outputs import Xdatcar
-        return Xdatcar(filepath, **kwargs)
-
-    def write_xdatcar(self, filepath="XDATCAR", groupby_type=True, overwrite=False, to_unit_cell=False):
-        """
-        Write Xdatcar file with unit cell and atomic positions to file ``filepath``.
-
-        Args:
-            filepath: Xdatcar filename. If None, a temporary file is created.
-            groupby_type: If True, atoms are grouped by type. Note that this option
-                may change the order of the atoms. This option is needed because
-                there are post-processing tools (e.g. ovito) that do not work as expected
-                if the atoms in the structure are not grouped by type.
-            overwrite: raise RuntimeError, if False and filepath exists.
-            to_unit_cell (bool): Whether to translate sites into the unit cell.
-
-        Return:
-            path to Xdatcar file.
-        """
-        if filepath is not None and os.path.exists(filepath) and not overwrite:
-            raise RuntimeError("Cannot overwrite pre-existing file `%s`" % filepath)
-        if filepath is None:
-            import tempfile
-            fd, filepath = tempfile.mkstemp(text=True, suffix="_XDATCAR")
-
-        # int typat[natom], double znucl[npsp]
-        # NB: typat is double in the HIST.nc file
-        typat = self.reader.read_value("typat").astype(int)
-        znucl = self.reader.read_value("znucl")
-        ntypat = self.reader.read_dimvalue("ntypat")
-        num_pseudos = self.reader.read_dimvalue("npsp")
-        if num_pseudos != ntypat:
-            raise NotImplementedError("Alchemical mixing is not supported, num_pseudos != ntypat")
-        #print("znucl:", znucl, "\ntypat:", typat)
-
-        symb2pos = OrderedDict()
-        symbols_atom = []
-        for iatom, itype in enumerate(typat):
-            itype = itype - 1
-            symbol = Element.from_Z(int(znucl[itype])).symbol
-            if symbol not in symb2pos: symb2pos[symbol] = []
-            symb2pos[symbol].append(iatom)
-            symbols_atom.append(symbol)
-
-        if not groupby_type:
-            group_ids = np.arange(self.reader.natom)
-        else:
-            group_ids = []
-            for pos_list in symb2pos.values():
-                group_ids.extend(pos_list)
-            group_ids = np.array(group_ids, dtype=np.int)
-
-        comment = " %s\n" % self.initial_structure.formula
-        with open(filepath, "wt") as fh:
-            # comment line  + scaling factor set to 1.0
-            fh.write(comment)
-            fh.write("1.0\n")
-            for vec in self.initial_structure.lattice.matrix:
-                fh.write("%.12f %.12f %.12f\n" % (vec[0], vec[1], vec[2]))
-            if not groupby_type:
-                fh.write(" ".join(symbols_atom) + "\n")
-                fh.write("1 " * len(symbols_atom) + "\n")
-            else:
-                fh.write(" ".join(symb2pos.keys()) + "\n")
-                fh.write(" ".join(str(len(p)) for p in symb2pos.values()) + "\n")
-
-            # Write atomic positions in reduced coordinates.
-            xred_list = self.reader.read_value("xred")
-            if to_unit_cell:
-                xred_list = xred_list % 1
-
-            for step in range(self.num_steps):
-                fh.write("Direct configuration= %d\n" % (step + 1))
-                frac_coords = xred_list[step, group_ids]
-                for fs in frac_coords:
-                    fh.write("%.12f %.12f %.12f\n" % (fs[0], fs[1], fs[2]))
-
-        return filepath
 
     def visualize(self, appname="ovito", to_unit_cell=False):  # pragma: no cover
         """
